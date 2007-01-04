@@ -1,0 +1,10 @@
+Changes
+Makefile.PL
+MANIFEST
+README
+WMA.pm
+data/test1.wma
+data/test2.wma
+t/1.t
+t/2.t
+META.yml                                Module meta-data (added by MakeMaker)
