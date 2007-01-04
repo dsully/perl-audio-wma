@@ -1,5 +1,16 @@
 Revision history for Perl extension Audio::WMA.
 
+1.0 Thu Jan  4 14:23:27 PST 2007
+
+	* RT #17556 - get tags from files with DRM.
+	* Calculate bitrates properly.
+	* Standalone object parsing.
+	* Combine some duplicated code.
+	* Parse the ASF_Extended_Stream_Properties_Object
+	* Parse a ASF_Metadata_Object inside a ASF_Extended_Header_Object.
+	* Parse embedded WM/Picture files.
+	* Create array refs for tags with multiple values.
+
 0.8 Sat Nov 26 00:13:34 PST 2005
 
 	Patch from Vidur Apparo to support parsing streams.

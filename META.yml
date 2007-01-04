@@ -1,10 +1,13 @@
-# http://module-build.sourceforge.net/META-spec.html
-#XXXXXXX This is a prototype!!!  It will change in the future!!! XXXXX#
-name:         Audio-WMA
-version:      0.7
-version_from: WMA.pm
-installdirs:  site
-requires:
-
+abstract: Perl extension for reading WMA/ASF Metadata
+author: 'Dan Sully, <daniel@cpan.org>'
 distribution_type: module
-generated_by: ExtUtils::MakeMaker version 6.21
+generated_by: Module::Install version 0.63
+license: perl
+name: Audio-WMA
+no_index:
+  directory:
+    - inc
+    - t
+requires:
+  perl: 5.005
+version: 1.0

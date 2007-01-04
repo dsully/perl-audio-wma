@@ -1,9 +1,11 @@
-use 5.008;
-use ExtUtils::MakeMaker;
+# $Id: Makefile.PL 10 1998-12-16 23:02:45Z daniel $
 
-WriteMakefile(
-    'NAME'		=> 'Audio::WMA',
-    'VERSION_FROM'	=> 'WMA.pm',
-    'PREREQ_PM'		=> {},
-    'AUTHOR'		=> 'Daniel Sully <daniel@cpan.org>',
-);
+use inc::Module::Install;
+
+name('Audio-WMA');
+license('perl');
+perl_version('5.005');
+all_from('WMA.pm');
+
+auto_install();
+WriteAll();
