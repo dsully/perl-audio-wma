@@ -11,12 +11,13 @@ if ($] > 5.007) {
 	require Encode;
 }
 
-$VERSION = '0.8';
+$VERSION = '1.0';
 
 my %guidMapping   = _knownGUIDs();
 my %reversedGUIDs = reverse %guidMapping;
+my %objectParsers = _knownParsers();
 
-my $DEBUG	  = 0;
+my $DEBUG         = 0;
 
 my $WORD          = 2;
 my $DWORD         = 4;
@@ -56,11 +57,48 @@ sub new {
 
 	unless (ref $file) {
 		close  $self->{'fileHandle'};
-		delete $self->{'fileHandle'};
-
 		close  FILE;
 	}
+	
+	delete $self->{'fileHandle'};
 
+	return $self;
+}
+
+sub parseObject {
+	my $class = shift;
+	my $data  = shift;
+	
+	# Read the GUID for this object
+	my $hex = qr/[0-9A-F]/i;
+	my $gr  = qr/($hex{8})($hex{4})($hex{4})($hex{4})($hex{12})/;
+	
+	my $guid;
+	map { $guid .= $_ } unpack( 'H*', substr $data, 0, 16 );
+	$guid      = uc( join '-', ( $guid =~ /$gr/ ) );
+	my $name   = $reversedGUIDs{$guid};
+	
+	# Set up a new WMA object for parsing
+	my $self = {
+		headerData => $data,
+		offset     => 16,
+	};
+	bless $self, $class;
+	
+	# Read the size
+	my $objectSize = _parse64BitString($self->_readAndIncrementOffset(8));
+	return -1 if !defined $objectSize;
+	
+	my $parser = $objectParsers{$name};
+	
+	if ( ref $parser ) {
+		$DEBUG && warn "Parsing $name (size: $objectSize)\n";
+		$parser->( $self );
+	}
+	else {
+		$DEBUG && warn "No parser found for $name (size: $objectSize)\n";
+	}
+	
 	return $self;
 }
 
@@ -194,8 +232,8 @@ sub _parseWMAHeader {
 			print "nextObjectSize: [" . $nextObjectSize . "]\n";
 			print "\n";
 		}
-        
-        	if (defined($nextObjectGUIDName)) {
+	
+		if (defined($nextObjectGUIDName)) {
 
 			# start the different header types parsing              
 			if ($nextObjectGUIDName eq 'ASF_File_Properties_Object') {
@@ -211,7 +249,7 @@ sub _parseWMAHeader {
 			}
 
 			if ($nextObjectGUIDName eq 'ASF_Content_Encryption_Object' ||
-			    $nextObjectGUIDName eq 'ASF_Extended_Content_Encryption_Object') {
+				$nextObjectGUIDName eq 'ASF_Extended_Content_Encryption_Object') {
 
 				$self->_parseASFContentEncryptionObject();
 				next;
@@ -228,6 +266,12 @@ sub _parseWMAHeader {
 				$self->_parseASFStreamPropertiesObject(0);
 				next;
 			}
+			
+			if ($nextObjectGUIDName eq 'ASF_Stream_Bitrate_Properties_Object') {
+
+				$self->_parseASFStreamBitratePropertiesObject();
+				next;
+			}
 
 			if ($nextObjectGUIDName eq 'ASF_Header_Extension_Object') {
 
@@ -242,6 +286,9 @@ sub _parseWMAHeader {
 
 	# Now work on the subtypes.
 	for my $stream (@{$self->{'STREAM'}}) {
+		
+		# insert stream bitrate
+		$stream->{'bitrate'} = $self->{'BITRATES'}->{ $stream->{'streamNumber'} };
 
 		if ($reversedGUIDs{ $stream->{'stream_type_guid'} } eq 'ASF_Audio_Media') {
 
@@ -255,6 +302,8 @@ sub _parseWMAHeader {
 	}
 
 	# pull these out and normalize them.
+	my @arrayOk = qw(ALBUMARTIST GENRE COMPOSER AUTHOR);
+
 	for my $ext (@{$self->{'EXT'}}) {
 
 		while (my ($k,$v) = each %{$ext->{'content'}}) {
@@ -266,7 +315,7 @@ sub _parseWMAHeader {
 			my $value = $v->{'value'} || 0;
 
 			# Append onto an existing item, as an array ref
-			if (exists $self->{'TAGS'}->{$name}) {
+			if (exists $self->{'TAGS'}->{$name} && grep { /^$name$/ } @arrayOk) {
 
 				if (ref($self->{'TAGS'}->{$name}) eq 'ARRAY') {
 
@@ -301,8 +350,7 @@ sub _parseASFFilePropertiesObject {
 
 	my %info = ();
 
-	$info{'fileid'}			= $self->_readAndIncrementOffset($GUID);
-	$info{'fileid_guid'}		= _byteStringToGUID($info{'fileid'});
+	$info{'fileid_guid'}		= _byteStringToGUID($self->_readAndIncrementOffset($GUID));
 
 	$info{'filesize'}		= _parse64BitString($self->_readAndIncrementOffset($QWORD));
 
@@ -325,7 +373,7 @@ sub _parseASFFilePropertiesObject {
 	$info{'max_packet_size'}	= unpack('V', $self->_readAndIncrementOffset($DWORD));
 	$info{'max_bitrate'}		= unpack('V', $self->_readAndIncrementOffset($DWORD));
 
-	$info{'bitrate'}		= $info{'max_bitrate'};
+	$info{'bitrate'}		= ($info{'playtime_seconds'}) ? ($info{'filesize'} * 8) / $info{'playtime_seconds'} : undef;
 
 	$self->{'INFO'}			= \%info;
 }
@@ -375,6 +423,60 @@ sub _parseASFExtendedContentDescriptionObject {
 			print "\ttype   = $data_type\n";
 			print "\tlength = $data_length\n";
 			print "\n";
+		}
+
+		# Parse out the WM/Picture structure into something we can use.
+		#
+		# typedef struct _WMPicture {
+		#  LPWSTR  pwszMIMEType;
+		#  BYTE  bPictureType;
+		#  LPWSTR  pwszDescription;
+		#  DWORD  dwDataLen;
+		#  BYTE*  pbData;
+		# };
+
+		if ($name eq 'WM/Picture') {
+
+			my $image_type_id = unpack('v', substr($value, 0, 1));
+			my $image_size    = unpack('v', substr($value, 1, $DWORD));
+			my $image_mime    = '';
+			my $image_desc    = '';
+			my $image_data    = '';
+			my $offset        = 5;
+			my $byte_pair     = '';
+
+			do {
+				$byte_pair = substr($value, $offset, 2);
+				$offset   += 2;
+				$image_mime .= $byte_pair;
+
+			} while ($byte_pair ne "\x00\x00");
+
+			do {
+				$byte_pair = substr($value, $offset, 2);
+				$offset   += 2;
+				$image_desc .= $byte_pair;
+
+			} while ($byte_pair ne "\x00\x00");
+
+			$image_mime = _UTF16ToUTF8($image_mime);
+			$image_desc = _UTF16ToUTF8($image_desc);
+			$image_data = substr($value, $offset, $image_size);
+
+			$value = {
+				'TYPE' => $image_mime,
+				'DATA' => $image_data,
+			};
+
+			if ($DEBUG) {
+				print "Ext Cont Desc: $id";
+				print "\tname          = $name\n";
+				print "\timage_type_id = $image_type_id\n";
+				print "\timage_size    = $image_size\n";
+				print "\timage_mime    = $image_mime\n";
+				print "\timage_desc    = $image_desc\n";
+				print "\n";
+			}
 		}
 
 		$ext{'content'}->{$id} = {
@@ -428,7 +530,7 @@ sub _parseASFStreamPropertiesObject {
 	$stream{'type_data_length'}   = unpack('v', $self->$method($DWORD));
 	$stream{'error_data_length'}  = unpack('v', $self->$method($DWORD));
 	$stream{'flags_raw'}          = unpack('v', $self->$method($WORD));
-	$streamNumber                 = $stream{'flags_raw'} & 0x007F;
+	$stream{'streamNumber'}       = $stream{'flags_raw'} & 0x007F;
 	$stream{'flags'}{'encrypted'} = ($stream{'flags_raw'} & 0x8000);
 
 	# Skip the DWORD
@@ -438,6 +540,24 @@ sub _parseASFStreamPropertiesObject {
 	$stream{'error_correct_data'} = $self->$method($stream{'error_data_length'});
 
 	push @{$self->{'STREAM'}}, \%stream;
+}
+
+sub _parseASFStreamBitratePropertiesObject {
+	my $self = shift;
+	
+	my $bitrates = {};
+	
+	my $count = unpack('v', $self->_readAndIncrementOffset($WORD));
+	
+	# Read each bitrate record
+	for ( 1..$count ) {
+		my $stream  = unpack('v', $self->_readAndIncrementOffset($WORD)) & 0x007F;
+		my $bitrate = unpack('V', $self->_readAndIncrementOffset($DWORD));
+		
+		$bitrates->{$stream} = $bitrate;
+	}
+	
+	$self->{'BITRATES'} = $bitrates;
 }
 
 sub _parseASFAudioMediaObject {
@@ -484,7 +604,8 @@ sub _parseWavFormat {
 		'codec'           => _RIFFwFormatTagLookup($wFormatTag),
 		'channels'        => unpack('v', substr($data,  2, $WORD)),
 		'sample_rate'     => unpack('v', substr($data,  4, $DWORD)),
-		'bitrate'         => unpack('v', substr($data,  8, $DWORD)) * 8,
+		# See bitrate in _parseASFFilePropertiesObject() for the correct calculation.
+		#'bitrate'         => unpack('v', substr($data,  8, $DWORD)) * 8,
 		'bits_per_sample' => unpack('v', substr($data, 14, $WORD)),
 	);
 
@@ -521,8 +642,8 @@ sub _parseASFExtendedStreamPropertiesObject {
 	);
 
 	for (my $s = 0; $s < $ext{'streamNameCount'}; $s++) {
-
-		my $language = unpack('v', $self->_readAndIncrementInlineOffset($WORD));
+		
+		my $language = unpack('v', $self->_readAndIncrementInlineOffset($WORD)) || last;
 		my $length   = unpack('v', $self->_readAndIncrementInlineOffset($WORD));
 
 		$self->_readAndIncrementInlineOffset($length);
@@ -530,8 +651,8 @@ sub _parseASFExtendedStreamPropertiesObject {
 	}
 
 	for (my $p = 0; $p < $ext{'payloadExtensionCount'}; $p++) {
-
-		$self->_readAndIncrementInlineOffset(18);
+		
+		$self->_readAndIncrementInlineOffset(18) || last;
 		my $length = unpack('V', $self->_readAndIncrementInlineOffset($DWORD));
 
 		$self->_readAndIncrementInlineOffset($length);
@@ -594,8 +715,8 @@ sub _parseASFHeaderExtensionObject {
 		}
 
 		# We only handle this object type for now.
-        	if ($nextObjectName eq 'ASF_Metadata_Library_Object' ||
-        	    $nextObjectName eq 'ASF_Metadata_Object') {
+		if ($nextObjectName eq 'ASF_Metadata_Library_Object' ||
+			$nextObjectName eq 'ASF_Metadata_Object') {
 
 			my $content_count = unpack('v', $self->_readAndIncrementInlineOffset($WORD));
 
@@ -619,6 +740,14 @@ sub _parseASFHeaderExtensionObject {
 				my $data_length   = unpack('V', $self->_readAndIncrementInlineOffset($DWORD));
 				my $name          = _denull($self->_readAndIncrementInlineOffset($name_length));
 				my $value         = $self->_bytesToValue($data_type, $self->_readAndIncrementInlineOffset($data_length));
+
+				if ($name eq 'WM/Picture') {
+		
+					$value = {
+						'TYPE' => 'image/jpg',
+						'DATA' => $value,
+					};
+				}
 
 				$ext{'content'}->{$id}->{'name'}  = $name;
 				$ext{'content'}->{$id}->{'value'} = $value;
@@ -675,7 +804,7 @@ sub _bytesToValue {
 
 	} elsif ($data_type == 1) {
 
-		$value = _byteStringToGUID($value);
+		# Leave byte arrays as is.
 
 	} elsif ($data_type == 2 || $data_type == 5) {
 
@@ -771,6 +900,21 @@ sub _knownGUIDs {
 	);
 
 	return %guidMapping;
+}
+
+sub _knownParsers {
+	
+	return (
+		'ASF_File_Properties_Object'              => \&_parseASFFilePropertiesObject,
+		'ASF_Content_Description_Object'          => \&_parseASFContentDescriptionObject,
+		'ASF_Stream_Bitrate_Properties_Object'    => \&_parseASFStreamBitratePropertiesObject,
+		
+		# We don't currently use most of these, so no point in spending time parsing them
+		#'ASF_Extended_Content_Description_Object' => \&_parseASFExtendedContentDescriptionObject,
+		#'ASF_Content_Encryption_Object'           => \&_parseASFContentEncryptionObject,
+		#'ASF_Extended_Content_Encryption_Object'  => \&_parseASFContentEncryptionObject,
+		#'ASF_Stream_Properties_Object'            => \&_parseASFStreamPropertiesObject,
+	);
 }
 
 sub _RIFFwFormatTagLookup {
@@ -982,6 +1126,8 @@ sub _byteStringToGUID {
 	my @byteString	= split //, shift;
 
 	my $guidString;
+	
+	return unless @byteString;
 
 	# this reverses _guidToByteString.
 	$guidString  = sprintf("%02X", ord($byteString[3]));
@@ -1059,11 +1205,11 @@ Audio::FLAC::Header, L<http://getid3.sf.net/>
 
 =head1 AUTHOR
 
-Dan Sully, E<lt>Dan@cpan.orgE<gt>
+Dan Sully, E<lt>daniel@cpan.orgE<gt>
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright 2003-2004 by Dan Sully
+Copyright 2003-2007 by Dan Sully & Slim Devices, Inc.
 
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself. 
