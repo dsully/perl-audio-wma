@@ -11,7 +11,7 @@ if ($] > 5.007) {
 	require Encode;
 }
 
-$VERSION = '1.0';
+$VERSION = '1.1';
 
 my %guidMapping   = _knownGUIDs();
 my %reversedGUIDs = reverse %guidMapping;
@@ -1206,6 +1206,42 @@ Audio::WMA - Perl extension for reading WMA/ASF Metadata
 =head1 DESCRIPTION
 
 This module implements access to metadata contained in WMA files.
+
+=head1 METHODS
+
+=over 4
+
+=item * new( $file )
+
+Create a new Audio::WMA instance from the data in $file
+
+=item * info( )
+
+Get the audio data information in the form of a hash ref.
+
+=item * tags( )
+
+Get the metadata / tag information in the form of a hash ref.
+
+=item * stream( )
+
+Get the current ASF stream.
+
+=item * parseObject( $asf )
+
+Parse a standalone ASF object.
+
+=item * setDebug( 0 | 1 )
+
+Toggle debugging.
+
+=item * setConvertTagsToUTF8( 0 | 1 )
+
+Toggle Encoding metadata tags as UTF-8
+
+Toggle debugging.
+
+=back
 
 =head1 SEE ALSO
 

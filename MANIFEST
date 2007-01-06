@@ -3,6 +3,7 @@ Makefile.PL
 MANIFEST
 README
 WMA.pm
+META.yml
 data/test1.wma
 data/test2.wma
 data/test-drm.wma
@@ -10,6 +11,7 @@ t/1.t
 t/2.t
 t/drm.t
 t/pod.t
+t/pod-coverage.t
 inc/Module/Install.pm
 inc/Module/Install/Metadata.pm
 inc/Module/Install/Base.pm
