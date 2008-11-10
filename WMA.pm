@@ -11,7 +11,7 @@ if ($] > 5.007) {
 	require Encode;
 }
 
-$VERSION = '1.1';
+$VERSION = '1.2';
 
 my %guidMapping   = _knownGUIDs();
 my %reversedGUIDs = reverse %guidMapping;
@@ -27,6 +27,7 @@ my $GUID          = 16;
 sub new {
 	my $class = shift;
 	my $file  = shift;
+	my $size  = shift;
 
 	my $self  = {};
 
@@ -35,8 +36,13 @@ sub new {
 	if (ref $file) {
 		binmode $file;
 		$self->{'fileHandle'} = $file;
-	}
-	else {
+
+		if ($size) {
+			$self->{'size'} = $size;
+		}
+
+	} else {
+
 		open(FILE, $file) or do {
 			warn "[$file] does not exist or cannot be read: $!";
 			return undef;
@@ -211,6 +217,9 @@ sub _parseWMAHeader {
 	# some sanity checks
 	return -1 if ($self->{'size'} && $objectSize > $self->{'size'});
 
+	# Must begin with ASF_Header_Object GUID
+	return -1 unless _byteStringToGUID($objectId) eq $guidMapping{ASF_Header_Object};
+
 	read($fh, $self->{'headerData'}, ($objectSize - 30));
 
 	for (my $headerCounter = 0; $headerCounter < $headerObjects; $headerCounter++) {
@@ -229,6 +238,7 @@ sub _parseWMAHeader {
 			print "nextObjectGUID: [" . $nextObjectGUIDText . "]\n";
 			print "nextObjectName: [" . (defined($nextObjectGUIDName) ? $nextObjectGUIDName : "<unknown>") . "]\n";
 			print "nextObjectSize: [" . $nextObjectSize . "]\n";
+			print "nextObjectOffset: [" . $nextObjectOffset . "]\n";
 			print "\n";
 		}
 
@@ -264,7 +274,7 @@ sub _parseWMAHeader {
 
 				$self->_parseASFContentEncryptionObject();
 			}
-	
+
 			elsif ($nextObjectGUIDName eq 'ASF_Extended_Content_Description_Object') {
 	
 				$self->_parseASFExtendedContentDescriptionObject();
@@ -317,7 +327,7 @@ sub _parseWMAHeader {
 		while (my ($k,$v) = each %{$ext->{'content'}}) {
 
 			# this gets both WM/Title and isVBR
-			next unless $v->{'name'} =~ s#^(?:WM/|is)##i || $v->{'name'} =~ /^Author/;
+			next unless $v->{'name'} =~ s#^(?:WM/|is|replay)##i || $v->{'name'} =~ /^Author/;
 
 			my $name  = uc($v->{'name'});
 			my $value = $v->{'value'} || 0;
@@ -424,7 +434,7 @@ sub _parseASFExtendedContentDescriptionObject {
 		my $data_length  = unpack('v', $self->_readAndIncrementOffset($WORD));
 		my $value        = $self->_bytesToValue($data_type, $self->_readAndIncrementOffset($data_length));
 
-		if ($DEBUG && $name ne 'WM/Picture') {
+		if ( $DEBUG && uc($name) ne 'WM/PICTURE' ) {
 			print "Ext Cont Desc: $id";
 			print "\tname   = $name\n";
 			print "\tvalue  = $value\n";
@@ -443,7 +453,7 @@ sub _parseASFExtendedContentDescriptionObject {
 		#  BYTE*  pbData;
 		# };
 
-		if ($name eq 'WM/Picture') {
+		if ( uc($name) eq 'WM/PICTURE' ) {
 
 			my $image_type_id = unpack('v', substr($value, 0, 1));
 			my $image_size    = unpack('v', substr($value, 1, $DWORD));
@@ -535,15 +545,18 @@ sub _parseASFStreamPropertiesObject {
 	$stream{'error_correct_guid'} = _byteStringToGUID($stream{'error_correct_type'});
 
 	$stream{'time_offset'}        = unpack('v', $self->$method($QWORD));
-	$stream{'type_data_length'}   = unpack('v', $self->$method($DWORD));
-	$stream{'error_data_length'}  = unpack('v', $self->$method($DWORD));
+	$stream{'type_data_length'}   = unpack('V', $self->$method($DWORD));
+	$stream{'error_data_length'}  = unpack('V', $self->$method($DWORD));
 	$stream{'flags_raw'}          = unpack('v', $self->$method($WORD));
 	$stream{'streamNumber'}       = $stream{'flags_raw'} & 0x007F;
 	$stream{'flags'}{'encrypted'} = ($stream{'flags_raw'} & 0x8000);
 
-	# Skip the DWORD
+	# Skip the reserved DWORD
 	$self->$method($DWORD);
 
+	# XXX: If a file has bogus data for either of these length values
+	# it will screw up parsing the rest of the header
+	# i.e. mms://c9l.earthcache.net/wlc-01.media.globix.net/COMP005996BCT1_wqxr_live_hi.wmv
 	$stream{'type_specific_data'} = $self->$method($stream{'type_data_length'});
 	$stream{'error_correct_data'} = $self->$method($stream{'error_data_length'});
 
@@ -611,7 +624,7 @@ sub _parseWavFormat {
 	my %wav  = (
 		'codec'           => _RIFFwFormatTagLookup($wFormatTag),
 		'channels'        => unpack('v', substr($data,  2, $WORD)),
-		'sample_rate'     => unpack('v', substr($data,  4, $DWORD)),
+		'sample_rate'     => unpack('V', substr($data,  4, $DWORD)),
 		# See bitrate in _parseASFFilePropertiesObject() for the correct calculation.
 		#'bitrate'         => unpack('v', substr($data,  8, $DWORD)) * 8,
 		'bits_per_sample' => unpack('v', substr($data, 14, $WORD)),
@@ -938,6 +951,8 @@ sub _RIFFwFormatTagLookup {
 		0x0006 => 'Microsoft A-Law',
 		0x0007 => 'Microsoft mu-Law',
 		0x0008 => 'Microsoft DTS',
+		0x000A => 'Windows Media Audio 9 Voice',
+		0x000B => 'Microsoft Windows Media RT Voice Audio',
 		0x0010 => 'OKI ADPCM',
 		0x0011 => 'Intel DVI/IMA ADPCM',
 		0x0012 => 'Videologic MediaSpace ADPCM',
@@ -1131,35 +1146,9 @@ sub _guidToByteString {
 }
 
 sub _byteStringToGUID {
-	my @byteString	= split //, shift;
-
-	my $guidString;
-	
-	return unless @byteString;
-
-	# this reverses _guidToByteString.
-	$guidString  = sprintf("%02X", ord($byteString[3]));
-	$guidString .= sprintf("%02X", ord($byteString[2]));
-	$guidString .= sprintf("%02X", ord($byteString[1]));
-	$guidString .= sprintf("%02X", ord($byteString[0]));
-	$guidString .= '-';
-	$guidString .= sprintf("%02X", ord($byteString[5]));
-	$guidString .= sprintf("%02X", ord($byteString[4]));
-	$guidString .= '-';
-	$guidString .= sprintf("%02X", ord($byteString[7]));
-	$guidString .= sprintf("%02X", ord($byteString[6]));
-	$guidString .= '-';
-	$guidString .= sprintf("%02X", ord($byteString[8]));
-	$guidString .= sprintf("%02X", ord($byteString[9]));
-	$guidString .= '-';
-	$guidString .= sprintf("%02X", ord($byteString[10]));
-	$guidString .= sprintf("%02X", ord($byteString[11]));
-	$guidString .= sprintf("%02X", ord($byteString[12]));
-	$guidString .= sprintf("%02X", ord($byteString[13]));
-	$guidString .= sprintf("%02X", ord($byteString[14]));
-	$guidString .= sprintf("%02X", ord($byteString[15]));
-
-	return uc($guidString);
+	my $buff = unpack('H*',pack('NnnNN',unpack('VvvNN',$_[0])));
+	$buff =~ s/(.{8})(.{4})(.{4})(.{4})/$1-$2-$3-$4-/;
+	return uc($buff);
 }
 
 sub _fileTimeToUnixTime {
@@ -1247,13 +1236,15 @@ Toggle debugging.
 
 Audio::FLAC::Header, L<http://getid3.sf.net/>
 
+http://github.com/dsully/perl-audio/tree/master/Audio-WMA
+
 =head1 AUTHOR
 
-Dan Sully, E<lt>daniel@cpan.orgE<gt>
+Dan Sully, E<lt>daniel | at | cpan.orgE<gt>
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright 2003-2007 by Dan Sully & Slim Devices, Inc.
+Copyright 2003-2008 by Dan Sully & Logitech.
 
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself. 

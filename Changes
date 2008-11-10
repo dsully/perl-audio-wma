@@ -1,5 +1,14 @@
 Revision history for Perl extension Audio::WMA.
 
+1.2 Sun Nov  9 18:53:43 PST 2008
+	* KDF : Parse replaygain and comment tags from WMA Extended Content block
+	* Andy: Would give up trying to parse a filehandle too soon because no size value was set
+	* Andy: Requires a size param when passed a filehandle, it will get into an infinite loop otherwise
+	* Andy: Sample rate field was being read as a 16-bit value instead of 32-bit
+	* Andy: Don't be case-sensitive when looking for WMA picture tag
+	* Andy: type_data_length and error_data_length are 32-bit values
+	* Andy: Add some missing wFormatTag values
+
 1.0 Thu Jan  4 14:23:27 PST 2007
 
 	* RT #17556 - get tags from files with DRM.

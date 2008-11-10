@@ -1,4 +1,4 @@
-Audio/WMA version 1.1
+Audio/WMA version 1.2
 ======================
 
 The README is used to introduce the module and provide instructions on
@@ -21,11 +21,13 @@ To install this module type the following:
    make test
    make install
 
+SOURCE
+
+http://github.com/dsully/perl-audio/tree/master/Audio-WMA
+
 COPYRIGHT AND LICENCE
 
-Put the correct copyright and licence information here.
-
-Copyright (C) 2003-2007 Dan Sully & Slim Devices
+Copyright (C) 2003-2008 Dan Sully & Logitech.
 
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself. 
