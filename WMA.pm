@@ -11,7 +11,7 @@ if ($] > 5.007) {
     require Encode;
 }
 
-$VERSION = '1.2';
+$VERSION = '1.3';
 
 my %guidMapping   = _knownGUIDs();
 my %reversedGUIDs = reverse %guidMapping;
