@@ -1219,7 +1219,7 @@ Toggle debugging.
 
 Audio::FLAC::Header, L<http://getid3.sf.net/>
 
-http://github.com/dsully/perl-audio/tree/master/Audio-WMA
+L<https://github.com/dsully/perl-audio-wma>
 
 =head1 AUTHOR
 
